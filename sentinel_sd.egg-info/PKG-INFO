@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: sentinel-sd
+Version: 3.2.0
+Summary: Sentinel Security Kernel: Zero-Trust AI Firewall for Prompt Injection & Jailbreak Defense.
+Author: Sentinel Team
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Security
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.7
+Dynamic: author
+Dynamic: classifier
+Dynamic: requires-python
+Dynamic: summary

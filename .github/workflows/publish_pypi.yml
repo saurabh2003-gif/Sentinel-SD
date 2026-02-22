@@ -1,0 +1,48 @@
+name: Monthly PyPI Publish
+
+on:
+  schedule:
+    - cron: '0 0 1 * *' # Midnight on the first day of every month
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed for committing the version bump
+      id-token: write # Needed for PyPI trusted publishing (optional but recommended)
+      
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Bump Library Version
+      run: |
+        python scripts/bump_version.py
+        
+    - name: Commit Version Bump
+      run: |
+        git config --global user.name 'Sentinel Auto-Publisher'
+        git config --global user.email 'publisher@sentinel.ai'
+        git add setup.py
+        if git diff --staged --quiet; then
+          echo "No changes in version."
+        else
+          git commit -m "Auto-Publisher: Bump version for monthly PyPI release [skip ci]"
+          git push
+        fi
+        
+    - name: Build Package
+      run: |
+        python -m pip install --upgrade pip build twine
+        python -m build
+        
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        # If not using token, ensure the repository is configured for PyPI trusted publishing.

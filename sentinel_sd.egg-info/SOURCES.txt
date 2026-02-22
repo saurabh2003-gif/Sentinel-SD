@@ -1,0 +1,10 @@
+README.md
+setup.py
+sentinel_sd.egg-info/PKG-INFO
+sentinel_sd.egg-info/SOURCES.txt
+sentinel_sd.egg-info/dependency_links.txt
+sentinel_sd.egg-info/entry_points.txt
+sentinel_sd.egg-info/top_level.txt
+sentinel_shield/__init__.py
+sentinel_shield/core.py
+sentinel_shield/dynamic_rules.json

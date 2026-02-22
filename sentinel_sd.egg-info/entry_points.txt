@@ -1,0 +1,2 @@
+[console_scripts]
+sentinel-scan = sentinel_shield.core:main
