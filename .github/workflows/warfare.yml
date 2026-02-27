@@ -36,7 +36,7 @@ jobs:
         git add sentinel_shield/dynamic_rules.json
         # Check for changes
         if git diff --staged --quiet; then
-          print("No new patterns learned.")
+          echo "No new patterns learned."
         else
           git commit -m "Auto-Defense: Learned new fuzzy patterns [skip ci]"
           git push
