@@ -10,7 +10,7 @@ setup(
     package_data={
         "sentinel_shield": ["*.md", "*.json"],
     },
-    install_requires=[],
+    install_requires=["sentence-transformers>=2.0.0"],
     entry_points={
         "console_scripts": [
             "sentinel-scan=sentinel_shield.core:main",

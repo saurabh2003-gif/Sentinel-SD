@@ -4,11 +4,29 @@ import sys
 import unicodedata
 import math
 import os
+import base64
 from typing import Dict, Any, List
 
+try:
+    from sentence_transformers import SentenceTransformer, util
+    HAS_SENTENCE_TRANSFORMERS = True
+except ImportError:
+    HAS_SENTENCE_TRANSFORMERS = False
+
 # --- CONFIGURATION & CONSTANTS ---
-SENTINEL_VERSION = "3.2-STATEFUL"
+SENTINEL_VERSION = "3.2-STATEFUL-SEMANTIC"
 CANARY_TOKENS = ["[SENTINEL_ALPHA_9]", "[REDACTED_SEC_0]"]
+
+# Semantic Intent Scanner - Forbidden Concepts
+FORBIDDEN_CONCEPTS = [
+    "harmful actions, violence, stealing, and illegal acts.",
+    "Bypassing security, hacking, exploiting, and root access.",
+    "Deception, malware, ransomware, and spyware.",
+    "Data theft, credential harvesting, and keylogging.",
+    "instructions on gaining unauthorized entry to a server.",
+    "a script that silently records a user's typed keys",
+    "how the system's memory can be intentionally overflowed."
+]
 
 # Extended "Pune/Mumbai Edge" / Regional detection keywords
 REGIONAL_KEYWORDS = [
@@ -69,6 +87,18 @@ class Sentinel:
         self.message_buffer = []
         self.dynamic_rules = self._load_dynamic_rules()
 
+        # Initialize Semantic Intent Scanner
+        self.semantic_threshold = 0.25
+        self.encoder_model = None
+        self.forbidden_embeddings = None
+        if HAS_SENTENCE_TRANSFORMERS:
+            try:
+                # all-MiniLM-L6-v2 is small, fast, and runs well on CPU.
+                self.encoder_model = SentenceTransformer('all-MiniLM-L6-v2')
+                self.forbidden_embeddings = self.encoder_model.encode(FORBIDDEN_CONCEPTS, convert_to_tensor=True)
+            except Exception as e:
+                print(f"[Sentinel] Warning: Could not load Semantic Intent Scanner model. {e}")
+
     def _load_system_prompt(self, filepath: str) -> str:
         try:
             with open(filepath, "r", encoding='utf-8') as f:
@@ -114,6 +144,70 @@ class Sentinel:
             pattern += r"\s*"
             
         return pattern.strip()
+
+    def _decode_hex(self, text: str) -> str:
+        """
+        V3.3 Feature: Hex Decoder
+        Detects and decodes hex-encoded strings (e.g., \\x70\\x6f\\x69 or pure hex format) 
+        to prevent obfuscation.
+        """
+        decoded_text = text
+        # 1. Match explicit python/C hex escapes: \x70\x6f\x69
+        hex_escape_pattern = re.compile(r'(?:\\x[0-9a-fA-F]{2})+')
+        for match in hex_escape_pattern.findall(text):
+            try:
+                # remove the '\x' and decode as hex
+                clean_hex = match.replace('\\x', '')
+                decoded = bytes.fromhex(clean_hex).decode('utf-8')
+                decoded_text = decoded_text.replace(match, f"{match} {decoded}")
+            except Exception:
+                continue
+                
+        # 2. Match continuous hex strings of sufficient length (e.g., 706f69736f6e for 'poison')
+        # Requires at least 8 chars (4 bytes) to avoid false positive matching of pure numbers
+        hex_continuous_pattern = re.compile(r'\b[0-9a-fA-F]{8,}\b')
+        for match in hex_continuous_pattern.findall(text):
+            # Only process if length is even
+            if len(match) % 2 == 0:
+                try:
+                    decoded = bytes.fromhex(match).decode('utf-8')
+                    # Ensure it decoded into something somewhat readable (not just gibberish bytes)
+                    # Simple heuristic: see if it contains any standard alphanumeric chars
+                    if any(c.isalnum() for c in decoded):
+                         decoded_text = decoded_text.replace(match, f"{match} {decoded}")
+                except Exception:
+                    continue
+                    
+        return decoded_text
+
+    def _decode_base64(self, text: str) -> str:
+        """
+        V3.3 Feature: Base64 Decoder
+        Detects and decodes base64 strings to prevent obfuscation.
+        """
+        decoded_text = text
+        # Find potential base64 strings (length >= 8, multiple of 4)
+        b64_pattern = re.compile(r'\b(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\b')
+        
+        for match in b64_pattern.findall(text):
+            try:
+                decoded = base64.b64decode(match).decode('utf-8')
+                # Replace with decoded content alongside the original to keep context
+                decoded_text = decoded_text.replace(match, f"{match} {decoded}")
+            except Exception:
+                continue
+                
+        # Catch full-string base64 without word boundaries
+        try:
+            trimmed = text.strip()
+            if len(trimmed) >= 8 and len(trimmed) % 4 == 0 and re.match(r'^[A-Za-z0-9+/]+={0,2}$', trimmed):
+                full_decoded = base64.b64decode(trimmed).decode('utf-8')
+                if full_decoded not in decoded_text:
+                    decoded_text += f" {full_decoded}"
+        except Exception:
+            pass
+            
+        return decoded_text
 
     def reload_rules(self):
         self.dynamic_rules = self._load_dynamic_rules()
@@ -216,6 +310,19 @@ class Sentinel:
         if is_malicious_topic:
              return self._verdict("MALICIOUS", 90, "NegativeConstraint", action="BLOCK")
 
+        # 8. PROTOCOL_7: SEMANTIC INTENT SCANNER
+        if self.encoder_model is not None and self.forbidden_embeddings is not None:
+             try:
+                 input_embedding = self.encoder_model.encode(text, convert_to_tensor=True)
+                 cosine_scores = util.cos_sim(input_embedding, self.forbidden_embeddings)
+                 max_score = float(cosine_scores.max())
+                 
+                 if max_score > self.semantic_threshold:
+                     return self._verdict("MALICIOUS", int(max_score * 100), "SemanticIntent", action="BLOCK")
+             except Exception as e:
+                 # Fail open (allow) if embedding fails to avoid blocking valid traffic
+                 pass
+
         return None # No threat found in this pass
 
     def analyze(self, user_input: str) -> Dict[str, Any]:
@@ -223,7 +330,12 @@ class Sentinel:
         Public API to analyze input. 
         Maintains a rolling buffer of history to detect split payloads.
         """
-        normalized_input = self.normalize_input(user_input)
+        # 1. Decode payload obfuscations
+        decoded_hex = self._decode_hex(user_input)
+        decoded_input = self._decode_base64(decoded_hex)
+        
+        # 2. Normalize Text
+        normalized_input = self.normalize_input(decoded_input)
         
         # Update buffer
         self.message_buffer.append(normalized_input)
@@ -235,7 +347,7 @@ class Sentinel:
         if result: return result
 
         # Invisible Character Check (Delta check only applicable to raw vs normalized current input)
-        if len(user_input) - len(normalized_input) > 2:
+        if len(decoded_input) - len(normalized_input) > 2:
              return self._verdict("MALICIOUS", 90, "Obfuscation", action="BLOCK")
 
         # 2. Check CUMULATIVE input (Payload Reconstruction)
