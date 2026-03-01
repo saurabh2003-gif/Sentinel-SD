@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="sentinel-sd",
-    version="3.2.0",
+    version="3.2.1",
     description="Sentinel Security Kernel: Zero-Trust AI Firewall for Prompt Injection & Jailbreak Defense.",
     author="Sentinel Team",
     packages=find_packages(),
